@@ -20,7 +20,7 @@
 <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useMemo } = React;
+const { useState, useMemo, useEffect } = React;
 
 // ===== 設定區：改成你自己的 Apps Script 部署網址 =====
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz_psL3X6BefKBo3jQxeK6PL0kpGZWu1Z0sCsfCyViKgZcyCCyJ456ybzHpwMhFrnw/exec";
@@ -71,6 +71,31 @@ async function submitOrderToSheet({ cartItems, total, totalQty, time, orderNo })
     return true;
   } catch (err) {
     console.error("送出訂單失敗", err);
+    return false;
+  }
+}
+
+async function fetchSoldOutStatus() {
+  try {
+    const res = await fetch(`${SCRIPT_URL}?action=getSoldOut`);
+    const data = await res.json();
+    return data.soldOut || {};
+  } catch (err) {
+    console.error("讀取售完狀態失敗", err);
+    return {};
+  }
+}
+
+async function updateSoldOutStatus(itemId, isSoldOut) {
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ action: "setSoldOut", itemId, isSoldOut }),
+    });
+    return true;
+  } catch (err) {
+    console.error("更新售完狀態失敗", err);
     return false;
   }
 }
@@ -301,6 +326,14 @@ function App() {
   const [time, setTime] = useState(null);
   const [orderNo] = useState(() => "A" + Math.floor(100 + Math.random() * 900));
   const [sendError, setSendError] = useState(false);
+  const [loadingMenu, setLoadingMenu] = useState(true);
+
+  useEffect(() => {
+    fetchSoldOutStatus().then((remote) => {
+      setSoldOut(remote);
+      setLoadingMenu(false);
+    });
+  }, []);
 
   const cartItems = Object.values(cart).filter((c) => c.qty > 0);
   const total = cartItems.reduce((s, c) => s + c.price * c.qty, 0);
@@ -317,7 +350,13 @@ function App() {
       return { ...prev, [key]: { ...cur, qty: Math.max(0, cur.qty + delta) } };
     });
   };
-  const toggleSoldOut = (id) => setSoldOut((p) => ({ ...p, [id]: !p[id] }));
+  const toggleSoldOut = (id) => {
+    setSoldOut((p) => {
+      const next = { ...p, [id]: !p[id] };
+      updateSoldOutStatus(id, next[id]);
+      return next;
+    });
+  };
 
   return (
     <div style={{ background: "#17140f", minHeight: "100vh", color: "#f3ead9" }}>
