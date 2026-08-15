@@ -69,12 +69,12 @@ const SLOTS = buildSlots();
 // ===== 設定區：老闆模式密碼，改成你自己想要的密碼 =====
 const ADMIN_PASSWORD = "00000000";
 
-async function submitOrderToSheet({ cartItems, total, totalQty, time, orderNo }) {
+async function submitOrderToSheet({ cartItems, total, totalQty, time, orderNo, phone }) {
   try {
     await fetch(SCRIPT_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify({ items: cartItems, total, totalQty, pickupTime: time, orderNo }),
+      body: JSON.stringify({ items: cartItems, total, totalQty, pickupTime: time, orderNo, phone }),
     });
     return true;
   } catch (err) {
@@ -258,12 +258,13 @@ function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, 
   );
 }
 
-function TimeScreen({ time, setTime, onBack, onNext }) {
+function TimeScreen({ time, setTime, phone, setPhone, onBack, onNext }) {
   const groups = useMemo(() => {
     const lunch = SLOTS.filter((s) => s < "16:00");
     const dinner = SLOTS.filter((s) => s >= "16:00");
     return [{ label: "午餐時段", slots: lunch }, { label: "晚餐時段", slots: dinner }];
   }, []);
+  const phoneValid = /^09\d{8}$/.test(phone.trim());
   return (
     <div className="pb-28">
       <TopBar title="選取餐時間" onBack={onBack} />
@@ -284,17 +285,32 @@ function TimeScreen({ time, setTime, onBack, onNext }) {
           </div>
         </div>
       ))}
+      <div className="mt-6 px-4">
+        <div className="text-sm font-bold mb-2" style={{ color: "#c98a2c" }}>聯絡電話（取餐通知用）</div>
+        <input
+          type="tel"
+          inputMode="numeric"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="請輸入手機號碼，例如 0912345678"
+          className="w-full px-4 py-3 rounded-xl text-sm"
+          style={{ background: "#221e18", border: "1px solid #3a3327", color: "#f3ead9" }}
+        />
+        {phone.length > 0 && !phoneValid && (
+          <div className="mt-1 text-xs" style={{ color: "#e08a72" }}>請輸入正確的手機號碼格式（09開頭共10碼）</div>
+        )}
+      </div>
       <div className="fixed bottom-0 left-0 right-0 px-4 pb-4 pt-2 z-30" style={{ background: "linear-gradient(to top, #17140f 60%, transparent)" }}>
-        <button disabled={!time} onClick={onNext} className="w-full rounded-2xl px-5 py-4 font-black text-lg disabled:cursor-not-allowed"
-          style={{ background: time ? "#c98a2c" : "#3a3327", color: time ? "#17140f" : "#8f8266" }}>
-          {time ? `確認取餐時間 ${time}` : "請選擇取餐時間"}
+        <button disabled={!time || !phoneValid} onClick={onNext} className="w-full rounded-2xl px-5 py-4 font-black text-lg disabled:cursor-not-allowed"
+          style={{ background: (time && phoneValid) ? "#c98a2c" : "#3a3327", color: (time && phoneValid) ? "#17140f" : "#8f8266" }}>
+          {!time ? "請選擇取餐時間" : !phoneValid ? "請填寫正確的電話號碼" : `確認取餐時間 ${time}`}
         </button>
       </div>
     </div>
   );
 }
 
-function CheckoutScreen({ cartItems, total, time, onBack, onConfirm, sendError }) {
+function CheckoutScreen({ cartItems, total, time, phone, onBack, onConfirm, sendError }) {
   return (
     <div className="pb-28">
       <TopBar title="確認訂單" onBack={onBack} />
@@ -304,8 +320,9 @@ function CheckoutScreen({ cartItems, total, time, onBack, onConfirm, sendError }
             送出失敗，請檢查網路連線後再試一次。
           </div>
         )}
-        <div className="rounded-2xl p-4" style={{ background: "#221e18", border: "1px solid #3a3327" }}>
+        <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ background: "#221e18", border: "1px solid #3a3327" }}>
           <div className="flex items-center gap-2 text-sm font-bold" style={{ color: "#c98a2c" }}>⏰ 取餐時間：今天 {time}</div>
+          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: "#c98a2c" }}>📱 聯絡電話：{phone}</div>
         </div>
         <div className="mt-4 rounded-2xl p-4" style={{ background: "#221e18", border: "1px solid #3a3327" }}>
           {cartItems.map((c, i) => (
@@ -377,6 +394,7 @@ function App() {
   const [cart, setCart] = useState({});
   const [step, setStep] = useState("menu");
   const [time, setTime] = useState(null);
+  const [phone, setPhone] = useState("");
   const [orderNo] = useState(() => "A" + Math.floor(100 + Math.random() * 900));
   const [sendError, setSendError] = useState(false);
   const [loadingMenu, setLoadingMenu] = useState(true);
@@ -435,14 +453,14 @@ function App() {
           addItem={addItem} cart={cart} changeQty={changeQty} total={total} totalQty={totalQty} onNext={() => setStep("time")}
           isClosed={isClosed} toggleClosed={toggleClosed} />
       )}
-      {step === "time" && <TimeScreen time={time} setTime={setTime} onBack={() => setStep("menu")} onNext={() => setStep("checkout")} />}
+      {step === "time" && <TimeScreen time={time} setTime={setTime} phone={phone} setPhone={setPhone} onBack={() => setStep("menu")} onNext={() => setStep("checkout")} />}
       {step === "checkout" && (
-        <CheckoutScreen cartItems={cartItems} total={total} time={time} sendError={sendError}
+        <CheckoutScreen cartItems={cartItems} total={total} time={time} phone={phone} sendError={sendError}
           onBack={() => setStep("time")}
           onConfirm={async () => {
             setSendError(false);
             setStep("sending");
-            const ok = await submitOrderToSheet({ cartItems, total, totalQty, time, orderNo });
+            const ok = await submitOrderToSheet({ cartItems, total, totalQty, time, orderNo, phone });
             if (ok) setStep("confirm"); else { setSendError(true); setStep("checkout"); }
           }} />
       )}
