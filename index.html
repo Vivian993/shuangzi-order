@@ -39,15 +39,15 @@ const CATEGORIES = [
 ];
 
 const MENU = [
-  { id: "youfan", cat: "rice", name: "油飯", en: "Steamed Glutinous Rice", sizes: [{ label: "小", price: 50 }, { label: "大", price: 60 }] },
-  { id: "sakura", cat: "rice", name: "櫻花蝦油飯", en: "Sakura Shrimp Rice", sizes: [{ label: "小", price: 60 }, { label: "大", price: 70 }] },
-  { id: "lurou", cat: "rice", name: "魯肉飯", en: "Braised Pork Rice", sizes: [{ label: "小", price: 40 }, { label: "大", price: 50 }] },
-  { id: "chaomian", cat: "noodle", name: "炒麵", en: "Fried Noodles", sizes: [{ label: "小", price: 45 }, { label: "大", price: 55 }] },
-  { id: "chaomifen", cat: "noodle", name: "炒米粉", en: "Fried Rice Noodles", sizes: [{ label: "小", price: 45 }, { label: "大", price: 55 }] },
-  { id: "yuwan", cat: "soup", name: "魚丸湯", en: "Fish Ball Soup", sizes: [{ label: "一碗", price: 35 }] },
-  { id: "chirou", cat: "soup", name: "赤肉湯", en: "Red Meat Soup", sizes: [{ label: "一碗", price: 50 }] },
-  { id: "ludan", cat: "side", name: "滷蛋", en: "Braised Egg", sizes: [{ label: "一顆", price: 15 }] },
-  { id: "hongcha", cat: "drink", name: "古早味紅茶", en: "Old-School Black Tea", sizes: [{ label: "一杯", price: 15 }] },
+  { id: "youfan", cat: "rice", name: "油飯", en: "Steamed Glutinous Rice", img: "youfan.jpg", sizes: [{ label: "小", price: 50 }, { label: "大", price: 60 }] },
+  { id: "sakura", cat: "rice", name: "櫻花蝦油飯", en: "Sakura Shrimp Rice", img: "sakura.jpg", sizes: [{ label: "小", price: 60 }, { label: "大", price: 70 }] },
+  { id: "lurou", cat: "rice", name: "魯肉飯", en: "Braised Pork Rice", img: "lurou.jpg", sizes: [{ label: "小", price: 40 }, { label: "大", price: 50 }] },
+  { id: "chaomian", cat: "noodle", name: "炒麵", en: "Fried Noodles", img: "chaomian.jpg", sizes: [{ label: "小", price: 45 }, { label: "大", price: 55 }] },
+  { id: "chaomifen", cat: "noodle", name: "炒米粉", en: "Fried Rice Noodles", img: "chaomifen.jpg", sizes: [{ label: "小", price: 45 }, { label: "大", price: 55 }] },
+  { id: "yuwan", cat: "soup", name: "魚丸湯", en: "Fish Ball Soup", img: "yuwan.jpg", sizes: [{ label: "一碗", price: 35 }] },
+  { id: "chirou", cat: "soup", name: "赤肉湯", en: "Red Meat Soup", img: "chirou.jpg", sizes: [{ label: "一碗", price: 50 }] },
+  { id: "ludan", cat: "side", name: "滷蛋", en: "Braised Egg", img: "ludan.jpg", sizes: [{ label: "一顆", price: 15 }] },
+  { id: "hongcha", cat: "drink", name: "古早味紅茶", en: "Old-School Black Tea", img: "hongcha.jpg", sizes: [{ label: "一杯", price: 15 }] },
 ];
 
 function buildSlots() {
@@ -139,7 +139,15 @@ function TopBar({ title, onBack, right }) {
 function MenuCard({ item, isSoldOut, adminMode, onToggleSoldOut, onAdd, cart, changeQty }) {
   return (
     <div className="rounded-2xl p-3 flex gap-3" style={{ background: "#221e18", border: "1px solid #3a3327", opacity: isSoldOut ? 0.45 : 1 }}>
-      <div className="w-16 h-16 rounded-xl flex items-center justify-center shrink-0 text-2xl" style={{ background: "#17140f" }}>🍚</div>
+      <div className="w-16 h-16 rounded-xl flex items-center justify-center shrink-0 text-2xl overflow-hidden" style={{ background: "#17140f" }}>
+        <img
+          src={item.img}
+          alt={item.name}
+          className="w-full h-full object-cover"
+          onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }}
+        />
+        <span style={{ display: "none" }} className="w-full h-full items-center justify-center">🍚</span>
+      </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2">
           <div>
