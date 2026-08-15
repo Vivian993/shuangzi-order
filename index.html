@@ -61,6 +61,9 @@ function buildSlots() {
 }
 const SLOTS = buildSlots();
 
+// ===== 設定區：老闆模式密碼，改成你自己想要的密碼 =====
+const ADMIN_PASSWORD = "00000000";
+
 async function submitOrderToSheet({ cartItems, total, totalQty, time, orderNo }) {
   try {
     await fetch(SCRIPT_URL, {
@@ -79,10 +82,10 @@ async function fetchSoldOutStatus() {
   try {
     const res = await fetch(`${SCRIPT_URL}?action=getSoldOut`);
     const data = await res.json();
-    return data.soldOut || {};
+    return { soldOut: data.soldOut || {}, isClosed: !!data.isClosed };
   } catch (err) {
-    console.error("讀取售完狀態失敗", err);
-    return {};
+    console.error("讀取狀態失敗", err);
+    return { soldOut: {}, isClosed: false };
   }
 }
 
@@ -96,6 +99,20 @@ async function updateSoldOutStatus(itemId, isSoldOut) {
     return true;
   } catch (err) {
     console.error("更新售完狀態失敗", err);
+    return false;
+  }
+}
+
+async function updateClosedStatus(isClosed) {
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ action: "setClosed", isClosed }),
+    });
+    return true;
+  } catch (err) {
+    console.error("更新公休狀態失敗", err);
     return false;
   }
 }
@@ -159,11 +176,30 @@ function MenuCard({ item, isSoldOut, adminMode, onToggleSoldOut, onAdd, cart, ch
   );
 }
 
-function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, cart, changeQty, total, totalQty, onNext }) {
+function ClosedScreen({ onAdminCheck }) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center text-center px-6">
+      <div className="display font-black text-3xl mb-2" style={{ color: "#f3ead9" }}>雙子油飯</div>
+      <div className="text-5xl mb-4">😴</div>
+      <div className="display font-bold text-xl mb-2" style={{ color: "#c98a2c" }}>今日公休</div>
+      <div className="text-sm" style={{ color: "#a89a7d" }}>造成不便，敬請見諒</div>
+      <button onClick={onAdminCheck} className="mt-10 text-xs px-3 py-1.5 rounded-full" style={{ color: "#6b6248", border: "1px solid #3a3327" }}>
+        店家登入
+      </button>
+    </div>
+  );
+}
+
+function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, cart, changeQty, total, totalQty, onNext, isClosed, toggleClosed }) {
   return (
     <div className="pb-28">
       <TopBar title="雙子油飯" right={
-        <button onClick={() => setAdminMode((a) => !a)} className="p-1 rounded-full active:bg-white/10">
+        <button onClick={() => {
+          if (adminMode) { setAdminMode(false); return; }
+          const pw = window.prompt("請輸入老闆模式密碼");
+          if (pw === ADMIN_PASSWORD) setAdminMode(true);
+          else if (pw !== null) alert("密碼錯誤");
+        }} className="p-1 rounded-full active:bg-white/10">
           <span style={{ color: adminMode ? "#c98a2c" : "#a89a7d" }}>⚙</span>
         </button>
       } />
@@ -176,6 +212,10 @@ function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, 
         <div className="mx-4 mt-3 mb-1 p-3 rounded-xl text-xs" style={{ background: "#2a2318", border: "1px dashed #c98a2c" }}>
           <div className="font-bold mb-1" style={{ color: "#c98a2c" }}>老闆模式（示範）</div>
           <div style={{ color: "#c8bda0" }}>點下方品項可切換「已售完」，顧客端會立即反灰無法選購。</div>
+          <button onClick={toggleClosed} className="mt-2 w-full py-2 rounded-lg font-bold"
+            style={{ background: isClosed ? "#b5361f" : "#17140f", color: isClosed ? "#f3ead9" : "#c98a2c", border: "1px solid #c98a2c" }}>
+            {isClosed ? "目前：今日公休中（點擊恢復營業）" : "點擊設定：今日公休"}
+          </button>
         </div>
       )}
       {CATEGORIES.map((cat) => {
@@ -327,10 +367,12 @@ function App() {
   const [orderNo] = useState(() => "A" + Math.floor(100 + Math.random() * 900));
   const [sendError, setSendError] = useState(false);
   const [loadingMenu, setLoadingMenu] = useState(true);
+  const [isClosed, setIsClosed] = useState(false);
 
   useEffect(() => {
-    fetchSoldOutStatus().then((remote) => {
+    fetchSoldOutStatus().then(({ soldOut: remote, isClosed: closed }) => {
       setSoldOut(remote);
+      setIsClosed(closed);
       setLoadingMenu(false);
     });
   }, []);
@@ -358,11 +400,27 @@ function App() {
     });
   };
 
+  const toggleClosed = () => {
+    setIsClosed((prev) => {
+      const next = !prev;
+      updateClosedStatus(next);
+      return next;
+    });
+  };
+
   return (
     <div style={{ background: "#17140f", minHeight: "100vh", color: "#f3ead9" }}>
-      {step === "menu" && (
+      {isClosed && step === "menu" && !adminMode && (
+        <ClosedScreen onAdminCheck={() => {
+          const pw = window.prompt("請輸入老闆模式密碼");
+          if (pw === ADMIN_PASSWORD) setAdminMode(true);
+          else if (pw !== null) alert("密碼錯誤");
+        }} />
+      )}
+      {(!isClosed || adminMode) && step === "menu" && (
         <MenuScreen soldOut={soldOut} adminMode={adminMode} setAdminMode={setAdminMode} toggleSoldOut={toggleSoldOut}
-          addItem={addItem} cart={cart} changeQty={changeQty} total={total} totalQty={totalQty} onNext={() => setStep("time")} />
+          addItem={addItem} cart={cart} changeQty={changeQty} total={total} totalQty={totalQty} onNext={() => setStep("time")}
+          isClosed={isClosed} toggleClosed={toggleClosed} />
       )}
       {step === "time" && <TimeScreen time={time} setTime={setTime} onBack={() => setStep("menu")} onNext={() => setStep("checkout")} />}
       {step === "checkout" && (
