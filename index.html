@@ -51,7 +51,7 @@ const MENU = [
 ];
 
 function buildSlots() {
-  const windows = [["11:00", "14:00"], ["17:00", "20:00"]];
+  const windows = [["06:00", "12:00"]];
   const slots = [];
   windows.forEach(([start, end]) => {
     let [h, m] = start.split(":").map(Number);
@@ -260,9 +260,7 @@ function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, 
 
 function TimeScreen({ time, setTime, phone, setPhone, onBack, onNext }) {
   const groups = useMemo(() => {
-    const lunch = SLOTS.filter((s) => s < "16:00");
-    const dinner = SLOTS.filter((s) => s >= "16:00");
-    return [{ label: "午餐時段", slots: lunch }, { label: "晚餐時段", slots: dinner }];
+    return [{ label: "今日供應時段", slots: SLOTS }].filter((g) => g.slots.length > 0);
   }, []);
   const phoneValid = /^09\d{8}$/.test(phone.trim());
   return (
@@ -378,10 +376,11 @@ function ConfirmScreen({ cartItems, total, time, orderNo, onRestart }) {
           </div>
           <div className="text-sm font-bold mt-2" style={{ color: "#b5361f" }}>請於今天 {time} 到店取餐</div>
         </div>
+        <div className="mt-3 text-xs px-1 text-center" style={{ color: "#8f8266" }}>取餐時請出示此畫面或告知訂單編號，方便核對</div>
       </div>
       <div className="px-4 mt-8">
         <button onClick={onRestart} className="w-full rounded-2xl px-5 py-4 font-bold" style={{ background: "#221e18", color: "#e9dcc3", border: "1px solid #3a3327" }}>
-          重新示範一次
+          返回菜單，再點一份
         </button>
       </div>
     </div>
