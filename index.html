@@ -62,12 +62,17 @@ function buildSlots() {
       if (m >= 60) { m -= 60; h += 1; }
     }
   });
-  return slots;
+  // 只保留還沒過去的時段（跟現在時間比較，加15分鐘緩衝，避免顧客選到來不及準備的時段）
+  const now = new Date();
+  const bufferMinutes = 15;
+  const cutoff = new Date(now.getTime() + bufferMinutes * 60000);
+  const cutoffStr = `${String(cutoff.getHours()).padStart(2, "0")}:${String(cutoff.getMinutes()).padStart(2, "0")}`;
+  return slots.filter((s) => s >= cutoffStr);
 }
 const SLOTS = buildSlots();
 
 // ===== 設定區：老闆模式密碼，改成你自己想要的密碼 =====
-const ADMIN_PASSWORD = "888888";
+const ADMIN_PASSWORD = "00000000";
 
 async function submitOrderToSheet({ cartItems, total, totalQty, time, orderNo, phone }) {
   try {
@@ -203,7 +208,7 @@ function ClosedScreen({ onAdminCheck }) {
   );
 }
 
-function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, cart, changeQty, total, totalQty, onNext, isClosed, toggleClosed }) {
+function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, cart, changeQty, total, totalQty, onNext, isClosed, toggleClosed, soldOutConflictName, onDismissConflict }) {
   return (
     <div className="pb-28">
       <TopBar title="雙子油飯" right={
@@ -216,6 +221,12 @@ function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, 
           <span style={{ color: adminMode ? "#c98a2c" : "#a89a7d" }}>⚙</span>
         </button>
       } />
+      {soldOutConflictName && (
+        <div className="mx-4 mt-3 p-3 rounded-xl text-sm flex items-start justify-between gap-2" style={{ background: "#b5361f22", border: "1px solid #b5361f", color: "#e08a72" }}>
+          <span>「{soldOutConflictName}」剛好售完了，已從購物車移除，請重新選購其他品項。</span>
+          <button onClick={onDismissConflict} className="shrink-0 font-bold">✕</button>
+        </div>
+      )}
       <div className="px-4 pt-4 pb-2">
         <div className="display font-black text-2xl" style={{ color: "#f3ead9" }}>雙子油飯 Shuangzi</div>
         <div className="text-xs mt-1" style={{ color: "#a89a7d" }}>選好餐點，接著挑取餐時間</div>
@@ -270,6 +281,11 @@ function TimeScreen({ time, setTime, phone, setPhone, onBack, onNext }) {
         <div className="flex items-center gap-2 text-sm" style={{ color: "#c8bda0" }}>⏰ 今天・請選擇取餐時段</div>
         <div className="chalk-line mt-3 rounded-full" />
       </div>
+      {groups.length === 0 && (
+        <div className="mx-4 mt-6 p-4 rounded-xl text-sm text-center" style={{ background: "#2a2318", border: "1px dashed #c98a2c", color: "#e08a72" }}>
+          今日供應時段已結束，請明天再來訂購
+        </div>
+      )}
       {groups.map((g) => (
         <div key={g.label} className="mt-5 px-4">
           <div className="text-sm font-bold mb-2" style={{ color: "#c98a2c" }}>{g.label}</div>
@@ -394,10 +410,16 @@ function App() {
   const [step, setStep] = useState("menu");
   const [time, setTime] = useState(null);
   const [phone, setPhone] = useState("");
-  const [orderNo] = useState(() => "A" + Math.floor(100 + Math.random() * 900));
+  const [orderNo] = useState(() => {
+    const timePart = Date.now().toString(36).slice(-4).toUpperCase();
+    const randPart = Math.floor(10 + Math.random() * 90);
+    return `A${timePart}${randPart}`;
+  });
   const [sendError, setSendError] = useState(false);
   const [loadingMenu, setLoadingMenu] = useState(true);
   const [isClosed, setIsClosed] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [soldOutConflictName, setSoldOutConflictName] = useState(null);
 
   useEffect(() => {
     fetchSoldOutStatus().then(({ soldOut: remote, isClosed: closed }) => {
@@ -415,11 +437,12 @@ function App() {
     const key = `${item.id}-${size.label}`;
     setCart((prev) => ({ ...prev, [key]: { id: item.id, name: item.name, size: size.label, price: size.price, qty: (prev[key]?.qty || 0) + 1 } }));
   };
+  const MAX_QTY_PER_ITEM = 20;
   const changeQty = (key, delta) => {
     setCart((prev) => {
       const cur = prev[key];
       if (!cur) return prev;
-      return { ...prev, [key]: { ...cur, qty: Math.max(0, cur.qty + delta) } };
+      return { ...prev, [key]: { ...cur, qty: Math.max(0, Math.min(MAX_QTY_PER_ITEM, cur.qty + delta)) } };
     });
   };
   const toggleSoldOut = (id) => {
@@ -450,16 +473,41 @@ function App() {
       {(!isClosed || adminMode) && step === "menu" && (
         <MenuScreen soldOut={soldOut} adminMode={adminMode} setAdminMode={setAdminMode} toggleSoldOut={toggleSoldOut}
           addItem={addItem} cart={cart} changeQty={changeQty} total={total} totalQty={totalQty} onNext={() => setStep("time")}
-          isClosed={isClosed} toggleClosed={toggleClosed} />
+          isClosed={isClosed} toggleClosed={toggleClosed}
+          soldOutConflictName={soldOutConflictName} onDismissConflict={() => setSoldOutConflictName(null)} />
       )}
       {step === "time" && <TimeScreen time={time} setTime={setTime} phone={phone} setPhone={setPhone} onBack={() => setStep("menu")} onNext={() => setStep("checkout")} />}
       {step === "checkout" && (
         <CheckoutScreen cartItems={cartItems} total={total} time={time} phone={phone} sendError={sendError}
           onBack={() => setStep("time")}
           onConfirm={async () => {
+            if (isSubmitting) return;
+            setIsSubmitting(true);
             setSendError(false);
             setStep("sending");
+
+            // 送出前重新檢查最新售完狀態，避免顧客訂到中途被標記售完的品項
+            const { soldOut: latestSoldOut } = await fetchSoldOutStatus();
+            const conflictItems = cartItems.filter((c) => latestSoldOut[c.id]);
+            if (conflictItems.length > 0) {
+              setSoldOut(latestSoldOut);
+              setSoldOutConflictName(conflictItems.map((c) => c.name).join("、"));
+              setCart((prev) => {
+                const next = { ...prev };
+                conflictItems.forEach((c) => {
+                  Object.keys(next).forEach((key) => {
+                    if (next[key].id === c.id) delete next[key];
+                  });
+                });
+                return next;
+              });
+              setStep("menu");
+              setIsSubmitting(false);
+              return;
+            }
+
             const ok = await submitOrderToSheet({ cartItems, total, totalQty, time, orderNo, phone });
+            setIsSubmitting(false);
             if (ok) setStep("confirm"); else { setSendError(true); setStep("checkout"); }
           }} />
       )}
