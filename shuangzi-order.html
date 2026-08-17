@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>雙子油飯 線上點餐</title>
+<!-- 📌 iPhone 桌面 App 圖示：會去抓您上傳到 GitHub 的 custom-icon.png 照片 -->
+<link rel="apple-touch-icon" href="custom-icon.png">
+<link rel="icon" type="image/png" href="custom-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="雙子油飯">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap');
+  body { margin: 0; background: #17140f; font-family: 'Noto Sans TC', sans-serif; }
+  .display { font-family: 'Noto Serif TC', serif; }
+  .chalk-line { background-image: repeating-linear-gradient(90deg, #e9dcc355 0 8px, transparent 8px 14px); height: 2px; }
+  ::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useMemo, useEffect } = React;
+
+// ===== 設定區：改成你自己的 Apps Script 部署網址 =====
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz_psL3X6BefKBo3jQxeK6PL0kpGZWu1Z0sCsfCyViKgZcyCCyJ456ybzHpwMhFrnw/exec";
+
+const CATEGORIES = [
+  { id: "rice", label: "主食" },
+  { id: "noodle", label: "炒麵/炒米粉" },
+  { id: "soup", label: "湯品" },
+  { id: "side", label: "小菜" },
+  { id: "drink", label: "飲料" },
+];
+
+const MENU = [
+  { id: "youfan", cat: "rice", name: "油飯", en: "Steamed Glutinous Rice", img: "youfan.jpg", sizes: [{ label: "小", price: 50 }, { label: "大", price: 60 }], options: [{ key: "tianla", onLabel: "加甜辣醬", offLabel: "不加醬" }] },
+  { id: "sakura", cat: "rice", name: "櫻花蝦油飯", en: "Sakura Shrimp Rice", img: "sakura.jpg", sizes: [{ label: "小", price: 60 }, { label: "大", price: 70 }], options: [{ key: "tianla", onLabel: "加甜辣醬", offLabel: "不加醬" }] },
+  { id: "lurou", cat: "rice", name: "魯肉飯", en: "Braised Pork Rice", img: "lurou.jpg", sizes: [{ label: "小", price: 40 }, { label: "大", price: 50 }], options: [{ key: "spicy", onLabel: "加辣", offLabel: "不辣" }] },
+  { id: "chaomian", cat: "noodle", name: "炒麵", en: "Fried Noodles", img: "chaomian.jpg", sizes: [{ label: "小", price: 45 }, { label: "大", price: 55 }], options: [{ key: "spicy", onLabel: "加辣", offLabel: "不辣" }] },
+  { id: "chaomifen", cat: "noodle", name: "炒米粉", en: "Fried Rice Noodles", img: "chaomifen.jpg", sizes: [{ label: "小", price: 45 }, { label: "大", price: 55 }], options: [{ key: "spicy", onLabel: "加辣", offLabel: "不辣" }] },
+  { id: "yuwan", cat: "soup", name: "魚丸湯", en: "Fish Ball Soup", img: "yuwan.jpg", sizes: [{ label: "一碗", price: 35 }] },
+  { id: "chirou", cat: "soup", name: "赤肉湯", en: "Red Meat Soup", img: "chirou.jpg", sizes: [{ label: "一碗", price: 50 }] },
+  { id: "ludan", cat: "side", name: "滷蛋", en: "Braised Egg", img: "ludan.jpg", sizes: [{ label: "一顆", price: 15 }] },
+  { id: "hongcha", cat: "drink", name: "古早味紅茶", en: "Old-School Black Tea", img: "hongcha.jpg", sizes: [{ label: "一杯", price: 15 }] },
+];
+
+function buildSlots() {
+  const windows = [["06:00", "12:00"]];
+  const slots = [];
+  windows.forEach(([start, end]) => {
+    let [h, m] = start.split(":").map(Number);
+    const [eh, em] = end.split(":").map(Number);
+    while (h < eh || (h === eh && m <= em)) {
+      slots.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+      m += 15;
+      if (m >= 60) { m -= 60; h += 1; }
+    }
+  });
+  // 只保留還沒過去的時段（跟現在時間比較，加15分鐘緩衝，避免顧客選到來不及準備的時段）
+  const now = new Date();
+  const bufferMinutes = 15;
+  const cutoff = new Date(now.getTime() + bufferMinutes * 60000);
+  const cutoffStr = `${String(cutoff.getHours()).padStart(2, "0")}:${String(cutoff.getMinutes()).padStart(2, "0")}`;
+  return slots.filter((s) => s >= cutoffStr);
+}
+const SLOTS = buildSlots();
+
+// ===== 設定區：老闆模式密碼，改成你自己想要的密碼 =====
+const ADMIN_PASSWORD = "00000000";
+
+async function submitOrderToSheet({ cartItems, total, totalQty, time, orderNo, phone, note }) {
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ items: cartItems, total, totalQty, pickupTime: time, orderNo, phone, note }),
+    });
+    return true;
+  } catch (err) {
+    console.error("送出訂單失敗", err);
+    return false;
+  }
+}
+
+async function fetchSoldOutStatus() {
+  try {
+    const res = await fetch(`${SCRIPT_URL}?action=getSoldOut`);
+    const data = await res.json();
+    return { soldOut: data.soldOut || {}, isClosed: !!data.isClosed };
+  } catch (err) {
+    console.error("讀取狀態失敗", err);
+    return { soldOut: {}, isClosed: false };
+  }
+}
+
+async function updateSoldOutStatus(itemId, isSoldOut) {
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ action: "setSoldOut", itemId, isSoldOut }),
+    });
+    return true;
+  } catch (err) {
+    console.error("更新售完狀態失敗", err);
+    return false;
+  }
+}
+
+async function updateClosedStatus(isClosed) {
+  try {
+    await fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({ action: "setClosed", isClosed }),
+    });
+    return true;
+  } catch (err) {
+    console.error("更新公休狀態失敗", err);
+    return false;
+  }
+}
+
+function TopBar({ title, onBack, right }) {
+  return (
+    <div style={{ background: "#221e18", borderBottom: "1px solid #3a3327" }} className="sticky top-0 z-20 flex items-center px-4 py-3 gap-2">
+      {onBack ? (
+        <button onClick={onBack} className="p-1 -ml-1 rounded-full active:bg-white/10">
+          <span style={{ color: "#f3ead9", fontSize: 22 }}>‹</span>
+        </button>
+      ) : <div className="w-6" />}
+      <div className="flex-1 text-center display font-bold text-lg" style={{ color: "#e9dcc3" }}>{title}</div>
+      <div className="w-6 flex justify-end">{right}</div>
+    </div>
+  );
+}
+
+function MenuCard({ item, isSoldOut, adminMode, onToggleSoldOut, onAdd, cart, changeQty, itemOptions, toggleOption }) {
+  return (
+    <div className="rounded-2xl p-3 flex gap-3" style={{ background: "#221e18", border: "1px solid #3a3327", opacity: isSoldOut ? 0.45 : 1 }}>
+      <div className="w-16 h-16 rounded-xl flex items-center justify-center shrink-0 text-2xl overflow-hidden" style={{ background: "#17140f" }}>
+        <img
+          src={item.img}
+          alt={item.name}
+          className="w-full h-full object-cover"
+          onError={(e) => { e.target.style.display = "none"; e.target.nextSibling.style.display = "flex"; }}
+        />
+        <span style={{ display: "none" }} className="w-full h-full items-center justify-center">🍚</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="font-bold" style={{ color: "#f3ead9" }}>{item.name}</div>
+            <div className="text-[11px]" style={{ color: "#8f8266" }}>{item.en}</div>
+          </div>
+          {isSoldOut && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full shrink-0" style={{ background: "#b5361f", color: "#f3ead9" }}>已售完</span>}
+          {adminMode && (
+            <button onClick={onToggleSoldOut} className="text-[11px] font-bold px-2 py-0.5 rounded-full shrink-0"
+              style={{ background: isSoldOut ? "#3a3327" : "#b5361f22", color: isSoldOut ? "#c8bda0" : "#e08a72", border: "1px solid #b5361f" }}>
+              {isSoldOut ? "設為供應中" : "標記售完"}
+            </button>
+          )}
+        </div>
+        {item.options && item.options.length > 0 && (
+          <div className="mt-2">
+            <div className="flex flex-wrap gap-3">
+              {item.options.map((opt) => {
+                const checked = !!(itemOptions[item.id] && itemOptions[item.id][opt.key]);
+                return (
+                  <label key={opt.key} className="flex items-center gap-1.5 text-xs select-none" style={{ color: checked ? "#c98a2c" : "#c8bda0" }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleOption(item.id, opt.key)}
+                      className="w-4 h-4 accent-[#c98a2c]"
+                    />
+                    {checked ? opt.onLabel : opt.offLabel}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="text-[10px] mt-1" style={{ color: "#6b6248" }}>勾選後再點下方「加入」，可分開加不同口味</div>
+          </div>
+        )}
+        {item.options && item.options.length > 0 ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <div className="flex flex-wrap gap-2">
+              {item.sizes.map((size) => (
+                <button key={size.label} disabled={isSoldOut} onClick={() => onAdd(size)} className="text-xs font-bold px-3 py-1.5 rounded-full disabled:cursor-not-allowed"
+                  style={{ background: isSoldOut ? "#2a2318" : "#17140f", color: isSoldOut ? "#6b6248" : "#e9dcc3", border: `1px solid ${isSoldOut ? "#3a3327" : "#c98a2c"}` }}>
+                  ＋ {size.label !== "一碗" && size.label !== "一顆" && size.label !== "一杯" ? size.label + " " : ""}${size.price}
+                </button>
+              ))}
+            </div>
+            {Object.entries(cart).filter(([k, v]) => v.id === item.id && v.qty > 0).length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                {Object.entries(cart).filter(([k, v]) => v.id === item.id && v.qty > 0).map(([key, line]) => (
+                  <div key={key} className="flex items-center justify-between rounded-lg px-3 py-1.5" style={{ background: "#17140f", border: "1px solid #3a3327" }}>
+                    <span className="text-xs font-bold" style={{ color: "#e9dcc3" }}>
+                      {line.size}{line.optionLabels && line.optionLabels.length ? `・${line.optionLabels.join("、")}` : ""}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => changeQty(key, -1)} className="w-6 h-6 flex items-center justify-center rounded-full active:bg-white/10" style={{ color: "#e9dcc3" }}>−</button>
+                      <span className="text-xs font-bold w-4 text-center" style={{ color: "#e9dcc3" }}>{line.qty}</span>
+                      <button onClick={() => changeQty(key, 1)} className="w-6 h-6 flex items-center justify-center rounded-full active:bg-white/10" style={{ color: "#e9dcc3" }}>+</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {item.sizes.map((size) => {
+            const key = `${item.id}-${size.label}`;
+            const qty = cart[key]?.qty || 0;
+            return (
+              <div key={size.label} className="flex items-center gap-1.5">
+                {qty === 0 ? (
+                  <button disabled={isSoldOut} onClick={() => onAdd(size)} className="text-xs font-bold px-3 py-1.5 rounded-full disabled:cursor-not-allowed"
+                    style={{ background: isSoldOut ? "#2a2318" : "#17140f", color: isSoldOut ? "#6b6248" : "#e9dcc3", border: `1px solid ${isSoldOut ? "#3a3327" : "#c98a2c"}` }}>
+                    {size.label !== "一碗" && size.label !== "一顆" && size.label !== "一杯" ? size.label + " " : ""}${size.price}
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-2 px-1 py-1 rounded-full" style={{ background: "#17140f", border: "1px solid #c98a2c" }}>
+                    <button onClick={() => changeQty(key, -1)} className="w-6 h-6 flex items-center justify-center rounded-full active:bg-white/10" style={{ color: "#e9dcc3" }}>−</button>
+                    <span className="text-xs font-bold w-4 text-center" style={{ color: "#e9dcc3" }}>{qty}</span>
+                    <button onClick={() => changeQty(key, 1)} className="w-6 h-6 flex items-center justify-center rounded-full active:bg-white/10" style={{ color: "#e9dcc3" }}>+</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ClosedScreen({ onAdminCheck }) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center text-center px-6">
+      <div className="display font-black text-3xl mb-2" style={{ color: "#f3ead9" }}>雙子油飯</div>
+      <div className="text-5xl mb-4">😴</div>
+      <div className="display font-bold text-xl mb-2" style={{ color: "#c98a2c" }}>今日公休</div>
+      <div className="text-sm" style={{ color: "#a89a7d" }}>造成不便，敬請見諒</div>
+      <button onClick={onAdminCheck} className="mt-10 text-xs px-3 py-1.5 rounded-full" style={{ color: "#6b6248", border: "1px solid #3a3327" }}>
+        店家登入
+      </button>
+    </div>
+  );
+}
+
+function MenuScreen({ soldOut, adminMode, setAdminMode, toggleSoldOut, addItem, cart, changeQty, total, totalQty, onNext, isClosed, toggleClosed, soldOutConflictName, onDismissConflict, itemOptions, toggleOption }) {
+  return (
+    <div className="pb-28">
+      <TopBar title="雙子油飯" right={
+        <button onClick={() => {
+          if (adminMode) { setAdminMode(false); return; }
+          const pw = window.prompt("請輸入老闆模式密碼");
+          if (pw === ADMIN_PASSWORD) setAdminMode(true);
+          else if (pw !== null) alert("密碼錯誤");
+        }} className="p-1 rounded-full active:bg-white/10">
+          <span style={{ color: adminMode ? "#c98a2c" : "#a89a7d" }}>⚙</span>
+        </button>
+      } />
+      {soldOutConflictName && (
+        <div className="mx-4 mt-3 p-3 rounded-xl text-sm flex items-start justify-between gap-2" style={{ background: "#b5361f22", border: "1px solid #b5361f", color: "#e08a72" }}>
+          <span>「{soldOutConflictName}」剛好售完了，已從購物車移除，請重新選購其他品項。</span>
+          <button onClick={onDismissConflict} className="shrink-0 font-bold">✕</button>
+        </div>
+      )}
+      <div className="px-4 pt-4 pb-2">
+        <div className="display font-black text-2xl" style={{ color: "#f3ead9" }}>雙子油飯 Shuangzi</div>
+        <div className="text-xs mt-1" style={{ color: "#a89a7d" }}>選好餐點，接著挑取餐時間</div>
+        <div className="chalk-line mt-3 rounded-full" />
+      </div>
+      {adminMode && (
+        <div className="mx-4 mt-3 mb-1 p-3 rounded-xl text-xs" style={{ background: "#2a2318", border: "1px dashed #c98a2c" }}>
+          <div className="font-bold mb-1" style={{ color: "#c98a2c" }}>老闆模式（示範）</div>
+          <div style={{ color: "#c8bda0" }}>點下方品項可切換「已售完」，顧客端會立即反灰無法選購。</div>
+          <button onClick={toggleClosed} className="mt-2 w-full py-2 rounded-lg font-bold"
+            style={{ background: isClosed ? "#b5361f" : "#17140f", color: isClosed ? "#f3ead9" : "#c98a2c", border: "1px solid #c98a2c" }}>
+            {isClosed ? "目前：今日公休中（點擊恢復營業）" : "點擊設定：今日公休"}
+          </button>
+        </div>
+      )}
+      {CATEGORIES.map((cat) => {
+        const items = MENU.filter((m) => m.cat === cat.id);
+        if (!items.length) return null;
+        return (
+          <div key={cat.id} className="mt-5">
+            <div className="px-4 text-sm font-bold tracking-wide" style={{ color: "#c98a2c" }}>{cat.label}</div>
+            <div className="px-4 mt-2 flex flex-col gap-3">
+              {items.map((item) => (
+                <MenuCard key={item.id} item={item} isSoldOut={!!soldOut[item.id]} adminMode={adminMode}
+                  onToggleSoldOut={() => toggleSoldOut(item.id)} onAdd={(size) => addItem(item, size)} cart={cart} changeQty={changeQty}
+                  itemOptions={itemOptions} toggleOption={toggleOption} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {totalQty > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 px-4 pb-4 pt-2 z-30" style={{ background: "linear-gradient(to top, #17140f 60%, transparent)" }}>
+          <button onClick={onNext} className="w-full flex items-center justify-between rounded-2xl px-5 py-4 active:scale-[0.98] transition-transform" style={{ background: "#c98a2c", color: "#17140f" }}>
+            <span className="flex items-center gap-2 font-bold">🧺 {totalQty} 項</span>
+            <span className="font-black text-lg">NT$ {total} ・ 選取餐時間</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TimeScreen({ time, setTime, phone, setPhone, onBack, onNext }) {
+  const groups = useMemo(() => {
+    return [{ label: "今日供應時段", slots: SLOTS }].filter((g) => g.slots.length > 0);
+  }, []);
+  const phoneValid = /^09\d{8}$/.test(phone.trim());
+  return (
+    <div className="pb-28">
+      <TopBar title="選取餐時間" onBack={onBack} />
+      <div className="px-4 pt-4">
+        <div className="flex items-center gap-2 text-sm" style={{ color: "#c8bda0" }}>⏰ 今天・請選擇取餐時段</div>
+        <div className="chalk-line mt-3 rounded-full" />
+      </div>
+      {groups.length === 0 && (
+        <div className="mx-4 mt-6 p-4 rounded-xl text-sm text-center" style={{ background: "#2a2318", border: "1px dashed #c98a2c", color: "#e08a72" }}>
+          今日供應時段已結束，請明天再來訂購
+        </div>
+      )}
+      {groups.map((g) => (
+        <div key={g.label} className="mt-5 px-4">
+          <div className="text-sm font-bold mb-2" style={{ color: "#c98a2c" }}>{g.label}</div>
+          <div className="grid grid-cols-4 gap-2">
+            {g.slots.map((s) => (
+              <button key={s} onClick={() => setTime(s)} className="py-2.5 rounded-xl text-sm font-bold"
+                style={{ background: time === s ? "#c98a2c" : "#221e18", color: time === s ? "#17140f" : "#e9dcc3", border: `1px solid ${time === s ? "#c98a2c" : "#3a3327"}` }}>
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+      <div className="mt-6 px-4">
+        <div className="text-sm font-bold mb-2" style={{ color: "#c98a2c" }}>聯絡電話（取餐通知用）</div>
+        <input
+          type="tel"
+          inputMode="numeric"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="請輸入手機號碼，例如 0912345678"
+          className="w-full px-4 py-3 rounded-xl text-sm"
+          style={{ background: "#221e18", border: "1px solid #3a3327", color: "#f3ead9" }}
+        />
+        {phone.length > 0 && !phoneValid && (
+          <div className="mt-1 text-xs" style={{ color: "#e08a72" }}>請輸入正確的手機號碼格式（09開頭共10碼）</div>
+        )}
+      </div>
+      <div className="fixed bottom-0 left-0 right-0 px-4 pb-4 pt-2 z-30" style={{ background: "linear-gradient(to top, #17140f 60%, transparent)" }}>
+        <button disabled={!time || !phoneValid} onClick={onNext} className="w-full rounded-2xl px-5 py-4 font-black text-lg disabled:cursor-not-allowed"
+          style={{ background: (time && phoneValid) ? "#c98a2c" : "#3a3327", color: (time && phoneValid) ? "#17140f" : "#8f8266" }}>
+          {!time ? "請選擇取餐時間" : !phoneValid ? "請填寫正確的電話號碼" : `確認取餐時間 ${time}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CheckoutScreen({ cartItems, total, time, phone, onBack, onConfirm, sendError, note, setNote }) {
+  return (
+    <div className="pb-28">
+      <TopBar title="確認訂單" onBack={onBack} />
+      <div className="px-4 pt-4">
+        {sendError && (
+          <div className="mb-3 rounded-xl p-3 text-sm" style={{ background: "#b5361f22", border: "1px solid #b5361f", color: "#e08a72" }}>
+            送出失敗，請檢查網路連線後再試一次。
+          </div>
+        )}
+        <div className="rounded-2xl p-4 flex flex-col gap-1" style={{ background: "#221e18", border: "1px solid #3a3327" }}>
+          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: "#c98a2c" }}>⏰ 取餐時間：今天 {time}</div>
+          <div className="flex items-center gap-2 text-sm font-bold" style={{ color: "#c98a2c" }}>📱 聯絡電話：{phone}</div>
+        </div>
+        <div className="mt-4 rounded-2xl p-4" style={{ background: "#221e18", border: "1px solid #3a3327" }}>
+          {cartItems.map((c, i) => (
+            <div key={i} className="flex items-center justify-between py-2" style={{ borderBottom: i < cartItems.length - 1 ? "1px solid #3a3327" : "none" }}>
+              <div>
+                <div className="font-bold text-sm" style={{ color: "#f3ead9" }}>
+                  {c.name} {c.size !== "一碗" && c.size !== "一顆" && c.size !== "一杯" ? `（${c.size}）` : ""}
+                  {c.optionLabels && c.optionLabels.length > 0 && (
+                    <span className="ml-1" style={{ color: "#c98a2c" }}>・{c.optionLabels.join("、")}</span>
+                  )}
+                </div>
+                <div className="text-xs" style={{ color: "#8f8266" }}>NT$ {c.price} × {c.qty}</div>
+              </div>
+              <div className="font-bold" style={{ color: "#e9dcc3" }}>NT$ {c.price * c.qty}</div>
+            </div>
+          ))}
+          <div className="chalk-line my-3 rounded-full" />
+          <div className="flex items-center justify-between">
+            <span className="font-bold" style={{ color: "#c98a2c" }}>總金額</span>
+            <span className="font-black text-xl" style={{ color: "#c98a2c" }}>NT$ {total}</span>
+          </div>
+        </div>
+        <div className="mt-4 rounded-2xl p-4" style={{ background: "#221e18", border: "1px solid #3a3327" }}>
+          <div className="text-sm font-bold mb-2" style={{ color: "#c98a2c" }}>備註（選填）</div>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="有其他需求嗎？例如：不要香菜、餐具數量等"
+            rows={3}
+            maxLength={200}
+            className="w-full px-3 py-2 rounded-xl text-sm resize-none"
+            style={{ background: "#17140f", border: "1px solid #3a3327", color: "#f3ead9" }}
+          />
+        </div>
+        <div className="mt-3 text-xs px-1" style={{ color: "#8f8266" }}>送出後將無法直接修改，如需調整請聯繫店家。</div>
+      </div>
+      <div className="fixed bottom-0 left-0 right-0 px-4 pb-4 pt-2 z-30" style={{ background: "linear-gradient(to top, #17140f 60%, transparent)" }}>
+        <button onClick={onConfirm} className="w-full rounded-2xl px-5 py-4 font-black text-lg active:scale-[0.98] transition-transform" style={{ background: "#b5361f", color: "#f3ead9" }}>
+          送出訂單
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmScreen({ cartItems, total, time, orderNo, note, onRestart }) {
+  return (
+    <div className="pb-10">
+      <TopBar title="訂單已送出" />
+      <div className="px-4 pt-6 flex flex-col items-center text-center">
+        <div className="w-16 h-16 rounded-full flex items-center justify-center mb-3" style={{ background: "#c98a2c22", border: "2px solid #c98a2c" }}>
+          <span style={{ color: "#c98a2c", fontSize: 30 }}>✓</span>
+        </div>
+        <div className="display font-black text-xl" style={{ color: "#f3ead9" }}>訂單已成立</div>
+        <div className="text-xs mt-1" style={{ color: "#8f8266" }}>店家已收到您的訂單，請準時取餐</div>
+      </div>
+      <div className="px-4 mt-6">
+        <div className="text-[11px] mb-1 px-1" style={{ color: "#8f8266" }}>雙子油飯・自動回覆</div>
+        <div className="rounded-2xl rounded-tl-sm p-4" style={{ background: "#e9dcc3", color: "#17140f" }}>
+          <div className="font-bold flex items-center gap-1.5">🔥 訂購成功｜訂單編號 {orderNo}</div>
+          <div className="chalk-line my-2 rounded-full" style={{ background: "#17140f22" }} />
+          {cartItems.map((c, i) => (
+            <div key={i} className="flex justify-between text-sm py-0.5">
+              <span>
+                {c.name} {c.size !== "一碗" && c.size !== "一顆" && c.size !== "一杯" ? `（${c.size}）` : ""}
+                {c.optionLabels && c.optionLabels.length > 0 ? `・${c.optionLabels.join("、")}` : ""} ×{c.qty}
+              </span>
+              <span>${c.price * c.qty}</span>
+            </div>
+          ))}
+          <div className="flex justify-between font-black mt-2 pt-2" style={{ borderTop: "1px solid #17140f22" }}>
+            <span>總金額</span><span>NT$ {total}</span>
+          </div>
+          <div className="text-sm font-bold mt-2" style={{ color: "#b5361f" }}>請於今天 {time} 到店取餐</div>
+          {note && note.trim() && (
+            <div className="mt-2 pt-2 text-sm" style={{ borderTop: "1px solid #17140f22" }}>
+              <span className="font-bold">備註：</span>{note}
+            </div>
+          )}
+        </div>
+        <div className="mt-3 text-xs px-1 text-center" style={{ color: "#8f8266" }}>取餐時請出示此畫面或告知訂單編號，方便核對</div>
+      </div>
+      <div className="px-4 mt-8">
+        <button onClick={onRestart} className="w-full rounded-2xl px-5 py-4 font-bold" style={{ background: "#221e18", color: "#e9dcc3", border: "1px solid #3a3327" }}>
+          返回菜單，再點一份
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [soldOut, setSoldOut] = useState({});
+  const [adminMode, setAdminMode] = useState(false);
+  const [cart, setCart] = useState({});
+  const [itemOptions, setItemOptions] = useState({});
+  const [note, setNote] = useState("");
+  const [step, setStep] = useState("menu");
+  const [time, setTime] = useState(null);
+  const [phone, setPhone] = useState("");
+  const [orderNo] = useState(() => {
+    const timePart = Date.now().toString(36).slice(-4).toUpperCase();
+    const randPart = Math.floor(10 + Math.random() * 90);
+    return `A${timePart}${randPart}`;
+  });
+  const [sendError, setSendError] = useState(false);
+  const [loadingMenu, setLoadingMenu] = useState(true);
+  const [isClosed, setIsClosed] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [soldOutConflictName, setSoldOutConflictName] = useState(null);
+
+  useEffect(() => {
+    fetchSoldOutStatus().then(({ soldOut: remote, isClosed: closed }) => {
+      setSoldOut(remote);
+      setIsClosed(closed);
+      setLoadingMenu(false);
+    });
+  }, []);
+
+  const cartItems = Object.values(cart).filter((c) => c.qty > 0);
+  const total = cartItems.reduce((s, c) => s + c.price * c.qty, 0);
+  const totalQty = cartItems.reduce((s, c) => s + c.qty, 0);
+
+  const addItem = (item, size) => {
+    let key = `${item.id}-${size.label}`;
+    let optionLabels = [];
+    if (item.options && item.options.length) {
+      const state = itemOptions[item.id] || {};
+      const sig = item.options.map((o) => (state[o.key] ? "1" : "0")).join("");
+      key = `${key}-${sig}`;
+      optionLabels = item.options.map((o) => (state[o.key] ? o.onLabel : o.offLabel));
+    }
+    setCart((prev) => ({
+      ...prev,
+      [key]: {
+        id: item.id, name: item.name, size: size.label, price: size.price,
+        qty: (prev[key]?.qty || 0) + 1,
+        optionLabels,
+      },
+    }));
+  };
+  const toggleOption = (itemId, optKey) => {
+    setItemOptions((prev) => ({
+      ...prev,
+      [itemId]: { ...(prev[itemId] || {}), [optKey]: !(prev[itemId] && prev[itemId][optKey]) },
+    }));
+  };
+  const MAX_QTY_PER_ITEM = 20;
+  const changeQty = (key, delta) => {
+    setCart((prev) => {
+      const cur = prev[key];
+      if (!cur) return prev;
+      return { ...prev, [key]: { ...cur, qty: Math.max(0, Math.min(MAX_QTY_PER_ITEM, cur.qty + delta)) } };
+    });
+  };
+  const toggleSoldOut = (id) => {
+    setSoldOut((p) => {
+      const next = { ...p, [id]: !p[id] };
+      updateSoldOutStatus(id, next[id]);
+      return next;
+    });
+  };
+
+  const toggleClosed = () => {
+    setIsClosed((prev) => {
+      const next = !prev;
+      updateClosedStatus(next);
+      return next;
+    });
+  };
+
+  return (
+    <div style={{ background: "#17140f", minHeight: "100vh", color: "#f3ead9" }}>
+      {isClosed && step === "menu" && !adminMode && (
+        <ClosedScreen onAdminCheck={() => {
+          const pw = window.prompt("請輸入老闆模式密碼");
+          if (pw === ADMIN_PASSWORD) setAdminMode(true);
+          else if (pw !== null) alert("密碼錯誤");
+        }} />
+      )}
+      {(!isClosed || adminMode) && step === "menu" && (
+        <MenuScreen soldOut={soldOut} adminMode={adminMode} setAdminMode={setAdminMode} toggleSoldOut={toggleSoldOut}
+          addItem={addItem} cart={cart} changeQty={changeQty} total={total} totalQty={totalQty} onNext={() => setStep("time")}
+          isClosed={isClosed} toggleClosed={toggleClosed}
+          soldOutConflictName={soldOutConflictName} onDismissConflict={() => setSoldOutConflictName(null)}
+          itemOptions={itemOptions} toggleOption={toggleOption} />
+      )}
+      {step === "time" && <TimeScreen time={time} setTime={setTime} phone={phone} setPhone={setPhone} onBack={() => setStep("menu")} onNext={() => setStep("checkout")} />}
+      {step === "checkout" && (
+        <CheckoutScreen cartItems={cartItems} total={total} time={time} phone={phone} sendError={sendError} note={note} setNote={setNote}
+          onBack={() => setStep("time")}
+          onConfirm={async () => {
+            if (isSubmitting) return;
+            setIsSubmitting(true);
+            setSendError(false);
+            setStep("sending");
+
+            // 送出前重新檢查最新售完狀態，避免顧客訂到中途被標記售完的品項
+            const { soldOut: latestSoldOut } = await fetchSoldOutStatus();
+            const conflictItems = cartItems.filter((c) => latestSoldOut[c.id]);
+            if (conflictItems.length > 0) {
+              setSoldOut(latestSoldOut);
+              setSoldOutConflictName(conflictItems.map((c) => c.name).join("、"));
+              setCart((prev) => {
+                const next = { ...prev };
+                conflictItems.forEach((c) => {
+                  Object.keys(next).forEach((key) => {
+                    if (next[key].id === c.id) delete next[key];
+                  });
+                });
+                return next;
+              });
+              setStep("menu");
+              setIsSubmitting(false);
+              return;
+            }
+
+            const ok = await submitOrderToSheet({ cartItems, total, totalQty, time, orderNo, phone, note });
+            setIsSubmitting(false);
+            if (ok) setStep("confirm"); else { setSendError(true); setStep("checkout"); }
+          }} />
+      )}
+      {step === "sending" && (
+        <div className="min-h-screen flex flex-col items-center justify-center gap-3">
+          <div className="w-10 h-10 rounded-full border-4 animate-spin" style={{ borderColor: "#c98a2c", borderTopColor: "transparent" }} />
+          <div style={{ color: "#c8bda0" }}>訂單送出中...</div>
+        </div>
+      )}
+      {step === "confirm" && (
+        <ConfirmScreen cartItems={cartItems} total={total} time={time} orderNo={orderNo} note={note}
+          onRestart={() => { setCart({}); setItemOptions({}); setNote(""); setTime(null); setStep("menu"); }} />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
